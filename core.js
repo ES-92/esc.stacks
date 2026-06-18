@@ -206,3 +206,70 @@ export async function migrateFromAudio() {
   clearCoverCache();
   return n;
 }
+
+/* ---------- Statistik (medienübergreifend) ---------- */
+let _stats = null, _statsTimer = null;
+const dayKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+async function loadStats() {
+  if (_stats) return _stats;
+  const s = await db.getMeta('stats').catch(() => null);
+  _stats = (s && s.days) ? s : { days: {} };
+  return _stats;
+}
+export async function trackTime(seconds) {
+  if (!seconds || seconds <= 0) return;
+  const s = await loadStats();
+  const k = dayKey();
+  s.days[k] = (s.days[k] || 0) + seconds;
+  if (!_statsTimer) _statsTimer = setTimeout(() => flushStats(), 3000);
+}
+export async function flushStats() {
+  clearTimeout(_statsTimer); _statsTimer = null;
+  if (_stats) await db.putMeta('stats', _stats);
+}
+export async function getStats() {
+  const s = await loadStats();
+  const today = Math.round(s.days[dayKey()] || 0);
+  // Streak: aufeinanderfolgende Tage (>= 60 s) bis heute
+  let streak = 0; const d = new Date();
+  for (;;) { if ((s.days[dayKey(d)] || 0) >= 60) { streak++; d.setDate(d.getDate() - 1); } else break; }
+  // letzte 7 Tage
+  const last7 = []; const base = new Date();
+  for (let i = 6; i >= 0; i--) { const x = new Date(base); x.setDate(base.getDate() - i); const k = dayKey(x);
+    last7.push({ day: k, dow: x.getDay(), sec: Math.round(s.days[k] || 0) }); }
+  const total = Math.round(Object.values(s.days).reduce((a, b) => a + b, 0));
+  return { today, streak, total, last7 };
+}
+
+/* ---------- Audio-Voreinstellungen (global) ---------- */
+let _aprefs = null;
+const APREFS_DEFAULT = { skipSilence: false, normalize: false, skipBack: 15, skipFwd: 30 };
+export async function getAudioPrefs() {
+  if (_aprefs) return _aprefs;
+  const s = await db.getMeta('audioPrefs').catch(() => null);
+  _aprefs = Object.assign({}, APREFS_DEFAULT, s || {});
+  return _aprefs;
+}
+export async function setAudioPrefs(patch) {
+  const p = await getAudioPrefs();
+  Object.assign(p, patch);
+  await db.putMeta('audioPrefs', p);
+  return p;
+}
+
+/* ---------- Reader-Voreinstellungen (global) ---------- */
+let _rprefs = null;
+const RPREFS_DEFAULT = { theme: 'dark', fontPx: 19, lead: 1.6, publisherCss: true };
+export async function getReaderPrefs() {
+  if (_rprefs) return _rprefs;
+  const s = await db.getMeta('readerPrefs').catch(() => null);
+  _rprefs = Object.assign({}, RPREFS_DEFAULT, s || {});
+  return _rprefs;
+}
+export async function setReaderPrefs(patch) {
+  const p = await getReaderPrefs();
+  Object.assign(p, patch);
+  await db.putMeta('readerPrefs', p);
+  return p;
+}

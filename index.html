@@ -88,6 +88,28 @@
   .srow:hover{background:var(--bg)}
   .srow .sub{font-size:12px;color:var(--txt-dim);font-family:var(--mono)}
   .srow.info{color:var(--txt-faint);font-size:12.5px;font-family:var(--mono);padding-top:14px}
+  .sgroup{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--txt-faint);margin:14px 6px 4px}
+  .srow.tog,.srow.segrow{flex-direction:row;align-items:center;justify-content:space-between}
+  .sw{width:42px;height:25px;border-radius:99px;background:var(--line);position:relative;flex:none;transition:.2s}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:19px;height:19px;border-radius:50%;background:#fff;transition:.2s}
+  .srow.tog.on .sw{background:var(--amber)}
+  .srow.tog.on .sw::after{transform:translateX(17px)}
+  .sheet .seg{display:flex;gap:6px}
+  .sheet .seg button{border:1px solid var(--line);border-radius:8px;padding:7px 11px;color:var(--txt-dim);font-family:var(--mono);font-size:12px;background:var(--bg)}
+  .sheet .seg button.active{border-color:var(--amber);background:var(--amber-dim);color:var(--amber-hi)}
+
+  /* Statistik */
+  .st-top{display:flex;gap:10px;margin:6px 2px 16px}
+  .st-card{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:13px 12px}
+  .st-card .v{font-family:var(--serif);font-size:22px;color:var(--amber-hi);line-height:1}
+  .st-card .l{font-size:11px;color:var(--txt-dim);font-family:var(--mono);margin-top:5px}
+  .st-chart{display:flex;align-items:flex-end;gap:7px;height:108px;padding:6px 4px 0}
+  .st-bar{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%}
+  .st-bar .col{width:100%;flex:1;display:flex;align-items:flex-end}
+  .st-bar .col i{display:block;width:100%;background:linear-gradient(180deg,var(--amber-hi),var(--amber));border-radius:5px 5px 0 0;min-height:3px;transition:height .3s}
+  .st-bar .col i.zero{background:var(--line)}
+  .st-bar .d{font-size:10px;color:var(--txt-faint);font-family:var(--mono)}
+  .st-bar.today .d{color:var(--amber-hi)}
 </style>
 </head>
 <body>
@@ -115,6 +137,7 @@
       <div class="filters" id="filters">
         <button class="fchip active" data-f="all">Alle</button>
         <button class="fchip" data-f="audio">Hörbücher</button>
+        <button class="fchip" data-f="music">Musik</button>
         <button class="fchip" data-f="reader">Bücher</button>
       </div>
       <div class="grid" id="grid"></div>
@@ -131,14 +154,37 @@
     <div id="stage"></div>
   </div>
 
+  <!-- Hinzufügen-Menü -->
+  <div class="sheet" id="addSheet">
+    <div class="handle"></div>
+    <h3>Hinzufügen</h3>
+    <button class="srow" id="addAudio"><span>Hörbuch</span><span class="sub">M4B/MP3 mit Kapiteln</span></button>
+    <button class="srow" id="addMusic"><span>Musik</span><span class="sub">Album · Tracks (MP3/FLAC …)</span></button>
+    <button class="srow" id="addBook"><span>Buch</span><span class="sub">EPUB</span></button>
+  </div>
+
   <!-- Einstellungen -->
   <div class="scrim" id="scrim"></div>
   <div class="sheet" id="settingsSheet">
     <div class="handle"></div>
     <h3>Einstellungen</h3>
+    <div class="sgroup">Audio</div>
+    <button class="srow tog" id="togSilence"><span>Stille überspringen</span><span class="sw"></span></button>
+    <button class="srow tog" id="togNormalize"><span>Lautstärke normalisieren</span><span class="sw"></span></button>
+    <div class="srow segrow"><span>Sprung zurück</span><div class="seg" id="segBack"></div></div>
+    <div class="srow segrow"><span>Sprung vor</span><div class="seg" id="segFwd"></div></div>
+    <div class="sgroup">Bibliothek</div>
+    <button class="srow" id="optStats"><span>Statistik</span><span class="sub">Hör- &amp; Lesezeit · Streak</span></button>
     <button class="srow" id="optExport"><span>Sicherung exportieren</span><span class="sub">Alles als .escstacks</span></button>
     <button class="srow" id="optImport"><span>Sicherung importieren</span><span class="sub">.escstacks einlesen</span></button>
     <div class="srow info"><span>Installierbar als App · läuft offline</span></div>
+  </div>
+
+  <!-- Statistik -->
+  <div class="sheet" id="statsSheet">
+    <div class="handle"></div>
+    <h3>Statistik</h3>
+    <div id="statsBody"></div>
   </div>
 
   <!-- Mini-Player (Audio läuft im Hintergrund weiter) -->

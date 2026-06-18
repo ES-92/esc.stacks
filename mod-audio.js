@@ -3,7 +3,7 @@
    Tempo pro Buch · Sleep-Timer (inkl. Kapitelende) · Lesezeichen
    · Media Session (Lockscreen) · hintergrundfähig (Mini-Player)
    ============================================================ */
-import { db, uid, esc, fmt, coverURL } from './core.js';
+import { db, uid, esc, fmt, coverURL, getAudioPrefs } from './core.js';
 
 const AudioMeta = () => window.AudioMeta;
 function probeDuration(file) {
@@ -73,8 +73,13 @@ class AudioInstance {
     this.overlays = [];
     this.coverUrl = null;
     this.onState = null; // von der Shell gesetzt (Mini-Player)
+    this.prefs = null;
+    this.fx = { built: false };
+    this._silTimer = null;
+    this._lastTick = 0;
   }
   async start() {
+    this.prefs = await getAudioPrefs();
     if (!document.getElementById('au-style')) { const s = document.createElement('style'); s.id = 'au-style'; s.textContent = PLAYER_CSS; document.head.appendChild(s); }
     this.coverUrl = await coverURL(this.item.id);
     this.host.innerHTML = `
@@ -115,15 +120,15 @@ class AudioInstance {
     this.elSpeed.classList.toggle('on', this.rate !== 1);
     this.audio.addEventListener('timeupdate', () => this.onTime());
     this.audio.addEventListener('ended', () => this.next());
-    this.audio.addEventListener('play', () => { this.elMain.innerHTML = ICON.pause; this.setSession(); this.onState && this.onState(); });
-    this.audio.addEventListener('pause', () => { this.elMain.innerHTML = ICON.play; this.onState && this.onState(); });
+    this.audio.addEventListener('play', () => { this.elMain.innerHTML = ICON.pause; this._lastTick = Date.now(); this.maybeInitFx(); this.ensureCtxResumed(); this.setSession(); this.onState && this.onState(); });
+    this.audio.addEventListener('pause', () => { this.elMain.innerHTML = ICON.play; this._lastTick = 0; this.onState && this.onState(); });
     await this.loadChapter(this.chapter, this.item.progress?.position || 0, false);
     this.setSession();
   }
   action(a) {
     if (a === 'toggle') this.toggle();
     else if (a === 'prev') this.prev(); else if (a === 'next') this.next();
-    else if (a === 'back') this.seek(-15); else if (a === 'fwd') this.seek(30);
+    else if (a === 'back') this.seek(-(this.prefs?.skipBack || 15)); else if (a === 'fwd') this.seek(this.prefs?.skipFwd || 30);
     else if (a === 'speed') this.cycleSpeed();
     else if (a === 'sleep') this.openSleep();
     else if (a === 'mark') this.addBookmark();
@@ -159,6 +164,9 @@ class AudioInstance {
   chapterAtTime(t) { let idx = this.chapter; for (let i = 0; i < this.item.toc.length; i++) { const c = this.item.toc[i]; if (mediaOf(c) !== this.mediaIndex) continue; if (t >= chStart(c) - 0.05) idx = i; } return idx; }
   onTime() {
     if (!this.scrubbing) this.paintScrub();
+    const now = Date.now();
+    if (this._lastTick && !this.audio.paused) { const dt = (now - this._lastTick) / 1000; if (dt > 0 && dt < 5) this.core.trackTime && this.core.trackTime(dt); }
+    this._lastTick = this.audio.paused ? 0 : now;
     const idx = this.chapterAtTime(this.audio.currentTime || 0);
     if (idx !== this.chapter) { this.chapter = idx; this.syncChapter(); }
     this.checkSleep();
@@ -262,9 +270,53 @@ class AudioInstance {
     } catch (_) {}
   }
 
+  /* Web Audio: Stille überspringen + Normalisieren */
+  maybeInitFx() { if (!this.fx.built && this.prefs && (this.prefs.skipSilence || this.prefs.normalize)) this.buildGraph(); }
+  buildGraph() {
+    const Ctx = window.AudioContext || window.webkitAudioContext; if (!Ctx) return;
+    try {
+      const ctx = new Ctx();
+      const src = ctx.createMediaElementSource(this.audio);
+      const comp = ctx.createDynamicsCompressor();
+      const gain = ctx.createGain();
+      const analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+      src.connect(comp); comp.connect(gain); gain.connect(analyser); analyser.connect(ctx.destination);
+      this.fx = { built: true, ctx, src, comp, gain, analyser };
+      this._silBuf = new Uint8Array(analyser.fftSize);
+      this.applyFx();
+      this.startSilenceMonitor();
+    } catch (_) {}
+  }
+  applyFx() {
+    if (!this.fx.built) return; const { comp, gain } = this.fx;
+    if (this.prefs.normalize) { comp.threshold.value = -28; comp.knee.value = 24; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.25; gain.gain.value = 1.7; }
+    else { comp.threshold.value = 0; comp.knee.value = 0; comp.ratio.value = 1; comp.attack.value = 0.003; comp.release.value = 0.25; gain.gain.value = 1; }
+  }
+  startSilenceMonitor() {
+    clearInterval(this._silTimer);
+    this._silTimer = setInterval(() => {
+      if (!this.fx.built) return;
+      if (!this.prefs.skipSilence || this.audio.paused) { if (this.audio.playbackRate !== this.rate) this.audio.playbackRate = this.rate; return; }
+      const a = this.fx.analyser; a.getByteTimeDomainData(this._silBuf);
+      let sum = 0; for (let i = 0; i < this._silBuf.length; i++) { const v = (this._silBuf[i] - 128) / 128; sum += v * v; }
+      const rms = Math.sqrt(sum / this._silBuf.length);
+      const boosted = this.rate * 2.2;
+      if (rms < 0.012) { if (this.audio.playbackRate !== boosted) this.audio.playbackRate = boosted; }
+      else if (this.audio.playbackRate !== this.rate) this.audio.playbackRate = this.rate;
+    }, 100);
+  }
+  ensureCtxResumed() { if (this.fx.ctx && this.fx.ctx.state === 'suspended') this.fx.ctx.resume().catch(() => {}); }
+  applyPrefs(p) {
+    this.prefs = p;
+    if ((p.skipSilence || p.normalize) && !this.fx.built) { this.buildGraph(); this.ensureCtxResumed(); }
+    else if (this.fx.built) { this.applyFx(); if (!p.skipSilence) this.audio.playbackRate = this.rate; }
+  }
+
   destroy() {
     try { this.audio.pause(); } catch (_) {}
+    clearInterval(this._silTimer);
     this.closeSheets();
+    if (this.fx.ctx) { try { this.fx.ctx.close(); } catch (_) {} }
     if (this.url) URL.revokeObjectURL(this.url);
     this.audio.src = ''; this.host.innerHTML = '';
   }
@@ -272,6 +324,7 @@ class AudioInstance {
 
 export default {
   id: 'audio', label: 'Hörbuch', badge: 'Audio',
+  pick: { accept: 'audio/*,.m4b,.m4a,.mp3,.aac,.ogg,.opus,.wav,.flac', multiple: true },
   accepts(file) { return (file.type && file.type.startsWith('audio')) || /\.(m4b|m4a|mp3|aac|ogg|opus|wav|flac)$/i.test(file.name); },
   async createItem(files, core) {
     files = [...files].sort(naturalSort);

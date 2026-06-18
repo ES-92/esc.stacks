@@ -4,7 +4,7 @@
 const CACHE = 'esc-stacks-v1';
 const SHELL = [
   './index.html', './shell.js', './core.js', './mod-audio.js', './mod-reader.js',
-  './meta.js', './manifest.webmanifest',
+  './mod-music.js', './meta.js', './manifest.webmanifest',
   './icon-192.png', './icon-512.png', './icon-maskable-512.png', './icon-180.png',
 ];
 

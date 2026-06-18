@@ -1,15 +1,18 @@
 /* ============================================================
    esc//shelf — Shell (Boot · Bibliothek · Import-Dispatch · Stage)
    ============================================================ */
-import { db, registry, $, esc, coverURL, clearCoverCache, saveProgress, toast, exportLibrary, importLibrary, migrateFromAudio } from './core.js';
+import { db, registry, $, esc, coverURL, clearCoverCache, saveProgress, toast, exportLibrary, importLibrary, migrateFromAudio, trackTime, getStats, flushStats, getAudioPrefs, setAudioPrefs } from './core.js';
 import audioMod from './mod-audio.js';
+import musicMod from './mod-music.js';
 import readerMod from './mod-reader.js';
 
 registry.register(audioMod);
+registry.register(musicMod);
 registry.register(readerMod);
 
-const core = { db, saveProgress, toast };
+const core = { db, saveProgress, toast, trackTime };
 let current = null;        // gemountetes Modul (Controller)
+let pendingModule = null;  // gewähltes Import-Modul
 let filter = 'all', query = '';
 let gridToken = 0;
 
@@ -21,8 +24,11 @@ async function boot() {
   await renderGrid();
 }
 function wire() {
-  $('importBtn').onclick = () => $('file').click();
+  $('importBtn').onclick = () => openAdd();
   $('file').onchange = async (e) => { const files = [...e.target.files]; e.target.value = ''; if (files.length) await doImport(files); };
+  $('addAudio').onclick = () => pickFor('audio');
+  $('addMusic').onclick = () => pickFor('music');
+  $('addBook').onclick = () => pickFor('reader');
   $('backBtn').onclick = () => closeItem();
   $('libSearch').oninput = () => { query = $('libSearch').value; renderGrid(); };
   $('filters').querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
@@ -37,14 +43,61 @@ function wire() {
 
   // Einstellungen / Sicherung
   $('settingsBtn').onclick = () => openSettings();
-  $('scrim').onclick = () => closeSettings();
+  $('scrim').onclick = () => closeSheets();
+  $('optStats').onclick = () => openStats();
   $('optExport').onclick = () => doExport();
   $('optImport').onclick = () => $('bakInput').click();
   $('bakInput').onchange = async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await doImportBackup(f); };
+  $('togSilence').onclick = () => updatePrefs({ skipSilence: !$('togSilence').classList.contains('on') });
+  $('togNormalize').onclick = () => updatePrefs({ normalize: !$('togNormalize').classList.contains('on') });
 }
 
-function openSettings() { $('scrim').classList.add('show'); $('settingsSheet').classList.add('show'); }
-function closeSettings() { $('scrim').classList.remove('show'); $('settingsSheet').classList.remove('show'); }
+const SKIP_BACK = [10, 15, 30], SKIP_FWD = [15, 30, 60];
+async function renderAudioPrefs() {
+  const p = await getAudioPrefs();
+  $('togSilence').classList.toggle('on', !!p.skipSilence);
+  $('togNormalize').classList.toggle('on', !!p.normalize);
+  $('segBack').innerHTML = SKIP_BACK.map(v => `<button data-v="${v}" class="${v === p.skipBack ? 'active' : ''}">${v}s</button>`).join('');
+  $('segFwd').innerHTML  = SKIP_FWD.map(v => `<button data-v="${v}" class="${v === p.skipFwd ? 'active' : ''}">${v}s</button>`).join('');
+  $('segBack').querySelectorAll('button').forEach(b => b.onclick = () => updatePrefs({ skipBack: +b.dataset.v }));
+  $('segFwd').querySelectorAll('button').forEach(b => b.onclick = () => updatePrefs({ skipFwd: +b.dataset.v }));
+}
+async function updatePrefs(patch) {
+  const p = await setAudioPrefs(patch);
+  if (current && current.item.type === 'audio' && current.ctrl.applyPrefs) current.ctrl.applyPrefs(p);
+  await renderAudioPrefs();
+}
+
+async function openSettings() { await renderAudioPrefs(); $('scrim').classList.add('show'); $('settingsSheet').classList.add('show'); }
+function closeSheets() { $('scrim').classList.remove('show'); $('settingsSheet').classList.remove('show'); $('statsSheet').classList.remove('show'); $('addSheet').classList.remove('show'); }
+function closeSettings() { closeSheets(); }
+
+function fmtDur(sec) {
+  sec = Math.round(sec || 0);
+  const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+  if (h) return `${h} Std ${m} Min`;
+  if (m) return `${m} Min`;
+  return `${sec} Sek`;
+}
+async function openStats() {
+  $('settingsSheet').classList.remove('show');
+  const s = await getStats();
+  const max = Math.max(1, ...s.last7.map(d => d.sec));
+  const DOW = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+  const todayKey = s.last7[s.last7.length - 1].day;
+  const bars = s.last7.map(d => {
+    const h = Math.round(d.sec / max * 100);
+    return `<div class="st-bar ${d.day === todayKey ? 'today' : ''}"><div class="col"><i class="${d.sec ? '' : 'zero'}" style="height:${d.sec ? Math.max(3, h) : 3}%"></i></div><div class="d">${DOW[d.dow]}</div></div>`;
+  }).join('');
+  $('statsBody').innerHTML = `
+    <div class="st-top">
+      <div class="st-card"><div class="v">${fmtDur(s.today)}</div><div class="l">heute</div></div>
+      <div class="st-card"><div class="v">${s.streak}</div><div class="l">Tage in Folge</div></div>
+      <div class="st-card"><div class="v">${fmtDur(s.total)}</div><div class="l">gesamt</div></div>
+    </div>
+    <div class="st-chart">${bars}</div>`;
+  $('scrim').classList.add('show'); $('statsSheet').classList.add('show');
+}
 
 async function doExport() {
   closeSettings(); toast('Exportiere …');
@@ -65,8 +118,16 @@ async function doImportBackup(file) {
   catch (err) { console.error(err); toast('Import fehlgeschlagen: ' + err.message); }
 }
 
+function openAdd() { $('scrim').classList.add('show'); $('addSheet').classList.add('show'); }
+function pickFor(id) {
+  pendingModule = registry.get(id);
+  const pk = pendingModule.pick || { accept: '', multiple: true };
+  const f = $('file'); f.setAttribute('accept', pk.accept); f.multiple = !!pk.multiple;
+  closeSheets(); f.click();
+}
+
 async function doImport(files) {
-  const mod = registry.forFile(files[0]);
+  const mod = pendingModule || registry.forFile(files[0]); pendingModule = null;
   if (!mod) { toast('Dateityp nicht unterstützt'); return; }
   toast('Importiere …');
   try {
@@ -79,6 +140,7 @@ async function doImport(files) {
 
 /* Fortschritt in Prozent — medienübergreifend */
 function itemPercent(item) {
+  if (item.type === 'music') return 0;
   if (item.type === 'reader') return item.progress?.percent || 0;
   // Audio: aus Kapitel-Offsets + Position
   const toc = item.toc || [];
@@ -143,7 +205,7 @@ async function openItem(id) {
 
 // „Zurück": Hörbuch läuft weiter (Mini-Player), Reader wird beendet.
 async function closeItem() {
-  if (current && current.item.type === 'audio') {
+  if (current && (current.item.type === 'audio' || current.item.type === 'music')) {
     background();
   } else {
     stopCurrent();
@@ -185,7 +247,10 @@ function updateMini() {
   $('miniToggle').innerHTML = m.playing ? PAUSE_ICON : PLAY_ICON;
 }
 
+window.addEventListener('pagehide', () => { try { flushStats(); } catch (_) {} });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') { try { flushStats(); } catch (_) {} } });
+
 boot();
 
 // Test-/Debug-Hook (harmlos): erlaubt Sicherung ohne UI-Download zu prüfen
-window.__stacks = { export: exportLibrary, import: importLibrary, render: renderGrid, db };
+window.__stacks = { export: exportLibrary, import: importLibrary, render: renderGrid, db, trackTime, getStats, flushStats, fxState: () => (current && current.ctrl && current.ctrl.fx) ? { built: current.ctrl.fx.built } : null };
