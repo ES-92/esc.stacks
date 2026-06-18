@@ -30,6 +30,8 @@
   .brand .s{color:var(--amber);font-weight:700}.brand .d{color:var(--txt-dim);font-weight:500}
   .iconbtn{width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:var(--txt-dim);border:1px solid var(--line)}
   .iconbtn:hover{color:var(--txt);background:var(--bg2)}.iconbtn svg{width:20px;height:20px}
+  .iconbtn.on{color:var(--amber-hi)}.iconbtn.on svg{fill:var(--amber-hi)}
+  .favstar{position:absolute;top:6px;left:6px;z-index:2;color:var(--amber-hi);font-size:14px;text-shadow:0 1px 3px rgba(0,0,0,.7)}
 
   main{flex:1;overflow:auto;padding:0 16px 28px;min-height:0}
   .toolbar{display:flex;gap:10px;margin:8px 0 12px}
@@ -136,8 +138,10 @@
       </div>
       <div class="filters" id="filters">
         <button class="fchip active" data-f="all">Alle</button>
+        <button class="fchip" data-f="fav" aria-label="Favoriten">★</button>
         <button class="fchip" data-f="audio">Hörbücher</button>
         <button class="fchip" data-f="music">Musik</button>
+        <button class="fchip" data-f="radio">Radio</button>
         <button class="fchip" data-f="reader">Bücher</button>
       </div>
       <div class="grid" id="grid"></div>
@@ -150,6 +154,10 @@
       <button class="iconbtn" id="backBtn" aria-label="Zurück">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
+      <div style="flex:1"></div>
+      <button class="iconbtn" id="favBtn" aria-label="Favorit">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.5l2.7 5.6 6.1.85-4.45 4.25 1.1 6.05L12 17.9l-5.45 2.8 1.1-6.05L3.2 9.95l6.1-.85z"/></svg>
+      </button>
     </div>
     <div id="stage"></div>
   </div>
@@ -160,6 +168,8 @@
     <h3>Hinzufügen</h3>
     <button class="srow" id="addAudio"><span>Hörbuch</span><span class="sub">M4B/MP3 mit Kapiteln</span></button>
     <button class="srow" id="addMusic"><span>Musik</span><span class="sub">Album · Tracks (MP3/FLAC …)</span></button>
+    <button class="srow" id="addRadio"><span>Radio</span><span class="sub">Internet-Stream · live</span></button>
+    <button class="srow" id="addPlaylist"><span>Playlist</span><span class="sub">Titel aus Alben sammeln</span></button>
     <button class="srow" id="addBook"><span>Buch</span><span class="sub">EPUB</span></button>
   </div>
 

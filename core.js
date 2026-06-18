@@ -55,6 +55,7 @@ export const db = {
   putMedia(k, blob) { return P(store('media', 'readwrite').put({ k, blob })); },
   getMedia(k)       { return P(store('media').get(k)); },
   delMedia(k)       { return P(store('media', 'readwrite').delete(k)); },
+  delCover(id)      { return P(store('covers', 'readwrite').delete(id)); },
   putCover(k, blob) { return P(store('covers', 'readwrite').put({ k, blob })); },
   getCover(k)       { return P(store('covers').get(k)); },
   getMeta(k)        { return P(store('meta').get(k)).then(r => (r ? r.v : undefined)); },
@@ -272,4 +273,27 @@ export async function setReaderPrefs(patch) {
   Object.assign(p, patch);
   await db.putMeta('readerPrefs', p);
   return p;
+}
+
+/* ---------- Playlists (album-übergreifend) ---------- */
+export async function getPlaylists() {
+  return (await db.getItems()).filter(i => i.type === 'playlist');
+}
+export async function createPlaylist(name) {
+  const id = uid();
+  const item = { id, type: 'playlist', title: (name || 'Neue Playlist').trim(), author: '',
+    entries: [], toc: [], parts: [], progress: { entryIndex: 0, position: 0, updatedAt: 0 }, createdAt: Date.now() };
+  await db.putItem(item);
+  return item;
+}
+export async function addToPlaylist(playlistId, entry) {
+  const pl = await db.getItem(playlistId); if (!pl) return null;
+  pl.entries = pl.entries || [];
+  pl.entries.push(entry); // { itemId, trackIndex, name, duration }
+  const hasCover = await db.getCover(playlistId).catch(() => null);
+  if (!hasCover) { const src = await db.getCover(entry.itemId).catch(() => null); if (src) await db.putCover(playlistId, src.blob); }
+  pl.progress = Object.assign({}, pl.progress, { updatedAt: Date.now() });
+  await db.putItem(pl);
+  clearCoverCache();
+  return pl;
 }

@@ -3,7 +3,7 @@
    Album = Eintrag · Tracks · Warteschlange · Shuffle/Repeat ·
    Hintergrund-Wiedergabe · Media Session
    ============================================================ */
-import { db, uid, esc, fmt, coverURL } from './core.js';
+import { db, uid, esc, fmt, coverURL, getPlaylists, createPlaylist, addToPlaylist } from './core.js';
 
 const AudioMeta = () => window.AudioMeta;
 function probeDuration(file) {
@@ -30,8 +30,10 @@ const CSS = `
 .mu-list{flex:1;overflow:auto;border-top:1px solid var(--line-soft)}
 .mu-tr{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:11px 8px;background:none;border:none;color:var(--txt);border-bottom:1px solid var(--line-soft)}
 .mu-tr .n{width:20px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--txt-faint);flex:none}
-.mu-tr .ti{flex:1;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mu-tr .ti{flex:1;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:none;border:none;color:inherit;text-align:left;padding:0}
 .mu-tr .d{font-family:var(--mono);font-size:12px;color:var(--txt-faint)}
+.mu-tr .add{background:none;border:1px solid var(--line);border-radius:7px;color:var(--txt-dim);width:26px;height:26px;flex:none;font-size:15px;line-height:1}
+.mu-tr .add:hover{border-color:var(--amber);color:var(--amber-hi)}
 .mu-tr.cur{color:var(--amber-hi)}.mu-tr.cur .n{color:var(--amber-hi)}
 .mu-bar{flex:none;padding:8px 4px calc(6px + var(--safe-b))}
 .mu-now{font-family:var(--mono);font-size:11px;color:var(--txt-dim);text-align:center;margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -42,6 +44,12 @@ const CSS = `
 .mu-b.main{width:60px;height:60px;background:var(--amber);color:#1a1208;border:none}
 .mu-b svg{width:21px;height:21px}.mu-b.main svg{width:26px;height:26px}
 .mu-b.on{border-color:var(--amber);color:var(--amber-hi)}
+.mu-cs-scrim{position:fixed;inset:0;background:rgba(6,8,11,.6);opacity:0;pointer-events:none;transition:.25s;z-index:88}
+.mu-cs-scrim.show{opacity:1;pointer-events:auto}
+.mu-cs{position:fixed;left:0;right:0;bottom:0;z-index:89;background:var(--bg2);border-top:1px solid var(--line);border-radius:20px 20px 0 0;padding:12px 18px calc(20px + var(--safe-b));max-width:560px;margin:0 auto;max-height:70vh;overflow:auto;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1)}
+.mu-cs.show{transform:none}.mu-cs h3{font-family:var(--serif);font-weight:500;margin:2px 0 10px}
+.mu-cs .opt{display:block;width:100%;text-align:left;padding:13px 10px;background:none;border:none;color:var(--txt);font-size:15px;border-radius:9px}
+.mu-cs .opt:hover{background:var(--bg)}.mu-cs .new{color:var(--amber-hi);border-top:1px solid var(--line-soft);margin-top:4px}
 `;
 const I = {
   play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
@@ -116,8 +124,31 @@ class MusicInstance {
   renderList() {
     const list = this.host.querySelector('.mu-list');
     list.innerHTML = this.tracks.map((t, i) =>
-      `<button class="mu-tr ${i === this.index ? 'cur' : ''}" data-i="${i}"><span class="n">${i + 1}</span><span class="ti">${esc(t.name)}</span><span class="d">${fmt(t.duration)}</span></button>`).join('');
-    list.querySelectorAll('[data-i]').forEach(b => b.onclick = () => this.loadTrack(+b.dataset.i, 0, true));
+      `<div class="mu-tr ${i === this.index ? 'cur' : ''}" data-i="${i}"><span class="n">${i + 1}</span><button class="ti" data-play="${i}">${esc(t.name)}</button><span class="d">${fmt(t.duration)}</span><button class="add" data-add="${i}" aria-label="Zur Playlist">+</button></div>`).join('');
+    list.querySelectorAll('[data-play]').forEach(b => b.onclick = () => this.loadTrack(+b.dataset.play, 0, true));
+    list.querySelectorAll('[data-add]').forEach(b => b.onclick = () => this.openAddToPlaylist(+b.dataset.add));
+  }
+  async openAddToPlaylist(trackIndex) {
+    const t = this.tracks[trackIndex]; if (!t) return;
+    const entry = { itemId: this.item.id, trackIndex, name: t.name, duration: t.duration };
+    const scrim = document.createElement('div'); scrim.className = 'mu-cs-scrim';
+    const sheet = document.createElement('div'); sheet.className = 'mu-cs';
+    const close = () => { scrim.remove(); sheet.remove(); };
+    const pls = await getPlaylists();
+    sheet.innerHTML = `<h3>Zu Playlist hinzufügen</h3>` +
+      pls.map(p => `<button class="opt" data-pl="${p.id}">${esc(p.title)} <span style="color:var(--txt-faint);font-family:var(--mono);font-size:11px">· ${(p.entries || []).length}</span></button>`).join('') +
+      `<button class="opt new" data-new="1">＋ Neue Playlist</button>`;
+    document.body.append(scrim, sheet);
+    requestAnimationFrame(() => { scrim.classList.add('show'); sheet.classList.add('show'); });
+    scrim.onclick = close;
+    sheet.querySelectorAll('[data-pl]').forEach(b => b.onclick = async () => {
+      const pl = await addToPlaylist(b.dataset.pl, entry); close();
+      this.core.toast && this.core.toast('Zu „' + pl.title + '" hinzugefügt');
+    });
+    sheet.querySelector('[data-new]').onclick = async () => {
+      const pl = await createPlaylist(this.item.title); await addToPlaylist(pl.id, entry); close();
+      this.core.toast && this.core.toast('Playlist „' + pl.title + '" erstellt');
+    };
   }
   async loadTrack(i, pos, autoplay) {
     i = Math.max(0, Math.min(i, this.tracks.length - 1)); this.index = i;

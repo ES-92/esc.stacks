@@ -4,10 +4,14 @@
 import { db, registry, $, esc, coverURL, clearCoverCache, saveProgress, toast, exportLibrary, importLibrary, migrateFromAudio, trackTime, getStats, flushStats, getAudioPrefs, setAudioPrefs } from './core.js';
 import audioMod from './mod-audio.js';
 import musicMod from './mod-music.js';
+import radioMod from './mod-radio.js';
+import playlistMod from './mod-playlist.js';
 import readerMod from './mod-reader.js';
 
 registry.register(audioMod);
 registry.register(musicMod);
+registry.register(radioMod);
+registry.register(playlistMod);
 registry.register(readerMod);
 
 const core = { db, saveProgress, toast, trackTime };
@@ -29,6 +33,8 @@ function wire() {
   $('addAudio').onclick = () => pickFor('audio');
   $('addMusic').onclick = () => pickFor('music');
   $('addBook').onclick = () => pickFor('reader');
+  $('addRadio').onclick = () => { closeSheets(); radioMod.addUI(core, () => renderGrid()); };
+  $('addPlaylist').onclick = () => { closeSheets(); playlistMod.addUI(core, () => renderGrid()); };
   $('backBtn').onclick = () => closeItem();
   $('libSearch').oninput = () => { query = $('libSearch').value; renderGrid(); };
   $('filters').querySelectorAll('[data-f]').forEach(b => b.onclick = () => {
@@ -140,7 +146,7 @@ async function doImport(files) {
 
 /* Fortschritt in Prozent — medienübergreifend */
 function itemPercent(item) {
-  if (item.type === 'music') return 0;
+  if (item.type === 'music' || item.type === 'radio' || item.type === 'playlist') return 0;
   if (item.type === 'reader') return item.progress?.percent || 0;
   // Audio: aus Kapitel-Offsets + Position
   const toc = item.toc || [];
@@ -157,13 +163,14 @@ async function renderGrid() {
   const token = ++gridToken;
   let items = await db.getItems();
   items = items.filter(it => {
-    if (filter !== 'all' && it.type !== filter) return false;
+    if (filter === 'fav') { if (!it.favorite) return false; }
+    else if (filter !== 'all' && it.type !== filter && !(filter === 'music' && it.type === 'playlist')) return false;
     if (query) { const hay = (it.title + ' ' + (it.author || '')).toLowerCase(); if (!hay.includes(query.toLowerCase())) return false; }
     return true;
-  }).sort((a, b) => (b.progress?.updatedAt || b.createdAt) - (a.progress?.updatedAt || a.createdAt));
+  }).sort((a, b) => ((b.favorite ? 1 : 0) - (a.favorite ? 1 : 0)) || ((b.progress?.updatedAt || b.createdAt) - (a.progress?.updatedAt || a.createdAt)));
 
   if (!items.length) {
-    grid.innerHTML = `<div class="empty">${query ? 'Keine Treffer.' : 'Noch nichts hier.<br>Tippe oben auf + und füge ein Hörbuch (M4B/MP3) oder ein Buch (EPUB) hinzu.'}</div>`;
+    grid.innerHTML = `<div class="empty">${query ? 'Keine Treffer.' : 'Noch nichts hier.<br>Tippe oben auf <b>+</b> — Hörbuch, Musik, Radio, Playlist oder Buch.'}</div>`;
     return;
   }
   grid.innerHTML = '';
@@ -177,6 +184,7 @@ async function renderGrid() {
     card.innerHTML = `
       <div class="cw">
         ${cu ? `<img src="${cu}" alt="">` : `<div class="fb">${esc(it.title)}</div>`}
+        ${it.favorite ? '<span class="favstar">★</span>' : ''}
         <span class="badge">${badge}</span>
         ${pct > 0 ? `<div class="cp"><i style="width:${pct}%"></i></div>` : ''}
       </div>
@@ -184,7 +192,84 @@ async function renderGrid() {
       <div class="ca">${esc(it.author || 'Unbekannt')}</div>`;
     grid.appendChild(card);
   }
-  grid.querySelectorAll('.card').forEach(c => c.onclick = () => openItem(c.dataset.id));
+  grid.querySelectorAll('.card').forEach(c => {
+    const it = items.find(x => x.id === c.dataset.id);
+    let lp = false, timer = null;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    c.onclick = () => { if (lp) { lp = false; return; } openItem(c.dataset.id); };
+    c.oncontextmenu = (e) => { e.preventDefault(); openCardMenu(it); };
+    c.addEventListener('pointerdown', (e) => { if (e.pointerType === 'mouse' && e.button !== 0) return; lp = false; timer = setTimeout(() => { lp = true; openCardMenu(it); }, 500); });
+    c.addEventListener('pointerup', cancel); c.addEventListener('pointermove', cancel); c.addEventListener('pointercancel', cancel);
+  });
+}
+
+function injectMenuCSS() {
+  if (document.getElementById('cm-style')) return;
+  const s = document.createElement('style'); s.id = 'cm-style';
+  s.textContent = `
+    .cm-scrim{position:fixed;inset:0;background:rgba(6,8,11,.6);opacity:0;pointer-events:none;transition:.25s;z-index:90}
+    .cm-scrim.show{opacity:1;pointer-events:auto}
+    .cm-sheet{position:fixed;left:0;right:0;bottom:0;z-index:91;background:var(--bg2);border-top:1px solid var(--line);border-radius:20px 20px 0 0;padding:10px 14px calc(18px + var(--safe-b));max-width:560px;margin:0 auto;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1)}
+    .cm-sheet.show{transform:none}
+    .cm-h{font-family:var(--serif);font-size:15px;padding:8px 8px 10px;color:var(--txt-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cm-row{display:block;width:100%;text-align:left;padding:14px 10px;background:none;border:none;color:var(--txt);font-size:15px;border-radius:9px}
+    .cm-row:hover{background:var(--bg)}.cm-row.del{color:#e0584f}
+    .cm-in{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;color:var(--txt);font-size:15px;padding:11px 12px;margin:4px 0 10px;outline:none}
+    .cm-in:focus{border-color:var(--amber)}
+    .cm-save{width:100%;background:var(--amber);color:#1a1208;font-weight:650;border-radius:10px;padding:12px;font-size:14px;border:none}
+    .cm-cancel{width:100%;background:none;border:1px solid var(--line);color:var(--txt-dim);border-radius:10px;padding:11px;font-size:14px;margin-top:8px}`;
+  document.head.appendChild(s);
+}
+function buildSheet(innerHTML) {
+  injectMenuCSS();
+  const scrim = document.createElement('div'); scrim.className = 'cm-scrim';
+  const sheet = document.createElement('div'); sheet.className = 'cm-sheet'; sheet.innerHTML = innerHTML;
+  document.body.append(scrim, sheet);
+  requestAnimationFrame(() => { scrim.classList.add('show'); sheet.classList.add('show'); });
+  const close = () => { scrim.remove(); sheet.remove(); };
+  scrim.onclick = close;
+  return { scrim, sheet, close };
+}
+function openCardMenu(item) {
+  const { sheet, close } = buildSheet(
+    `<div class="cm-h">${esc(item.title)}</div>
+     <button class="cm-row" data-a="fav">${item.favorite ? '★ Favorit entfernen' : '☆ Als Favorit'}</button>
+     <button class="cm-row" data-a="rename">Umbenennen</button>
+     <button class="cm-row del" data-a="delete">Löschen</button>`);
+  sheet.querySelector('[data-a="fav"]').onclick = async () => { close(); await toggleFavorite(item); };
+  sheet.querySelector('[data-a="rename"]').onclick = () => { close(); renameItem(item); };
+  sheet.querySelector('[data-a="delete"]').onclick = () => { close(); confirmDelete(item); };
+}
+function renameItem(item) {
+  const { sheet, close } = buildSheet(
+    `<div class="cm-h">Umbenennen</div>
+     <input class="cm-in" id="cmName" value="${esc(item.title)}">
+     <button class="cm-save" id="cmSave">Speichern</button>
+     <button class="cm-cancel" id="cmCancel">Abbrechen</button>`);
+  const input = sheet.querySelector('#cmName'); input.focus(); input.select();
+  sheet.querySelector('#cmCancel').onclick = close;
+  sheet.querySelector('#cmSave').onclick = async () => {
+    const v = input.value.trim(); if (!v) return;
+    item.title = v; await db.putItem(item); close();
+    if (current && current.item && current.item.id === item.id) current.item.title = v;
+    renderGrid(); toast('Umbenannt');
+  };
+}
+function confirmDelete(item) {
+  const { sheet, close } = buildSheet(
+    `<div class="cm-h">„${esc(item.title)}" löschen?</div>
+     <button class="cm-row del" id="cmDel">Endgültig löschen</button>
+     <button class="cm-cancel" id="cmNo">Abbrechen</button>`);
+  sheet.querySelector('#cmNo').onclick = close;
+  sheet.querySelector('#cmDel').onclick = async () => { close(); await deleteItem(item); };
+}
+async function deleteItem(item) {
+  if (current && current.item && current.item.id === item.id) closeItem();
+  const n = Math.max(1, (item.parts && item.parts.length) || (item.toc && item.toc.length) || 0);
+  if (item.type !== 'radio' && item.type !== 'playlist') { for (let i = 0; i < n; i++) await db.delMedia(`${item.id}:${i}`).catch(() => {}); }
+  await db.delCover(item.id).catch(() => {});
+  await db.delItem(item.id);
+  clearCoverCache(); renderGrid(); toast('Gelöscht');
 }
 
 async function openItem(id) {
@@ -200,12 +285,26 @@ async function openItem(id) {
     const ctrl = await mod.mount(item, $('stage'), core);
     current = { item, ctrl };
     if (ctrl) ctrl.onState = updateMini;
+    syncFavBtn();
   } catch (err) { console.error(err); toast('Konnte nicht öffnen'); backToLibrary(); }
+}
+
+function syncFavBtn() {
+  const btn = $('favBtn'); if (!btn) return;
+  btn.classList.toggle('on', !!(current && current.item && current.item.favorite));
+  btn.onclick = () => { if (current && current.item) toggleFavorite(current.item); };
+}
+async function toggleFavorite(item) {
+  item.favorite = !item.favorite;
+  await db.putItem(item);
+  if (current && current.item && current.item.id === item.id) { current.item.favorite = item.favorite; syncFavBtn(); }
+  renderGrid();
+  toast(item.favorite ? 'Zu Favoriten' : 'Aus Favoriten entfernt');
 }
 
 // „Zurück": Hörbuch läuft weiter (Mini-Player), Reader wird beendet.
 async function closeItem() {
-  if (current && (current.item.type === 'audio' || current.item.type === 'music')) {
+  if (current && ['audio', 'music', 'radio', 'playlist'].includes(current.item.type)) {
     background();
   } else {
     stopCurrent();
